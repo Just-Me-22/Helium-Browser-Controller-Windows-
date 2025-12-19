@@ -369,76 +369,76 @@ async function deleteHistoryEntry(entryId: number): Promise<boolean> {
 
   // Strategy 1: Try direct deletion with WAL mode and transaction (works if browser isn't actively writing)
   try {
-    const deleteQuery = `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=15000; BEGIN IMMEDIATE TRANSACTION; DELETE FROM urls WHERE id = ${entryId}; DELETE FROM visits WHERE url = ${entryId}; COMMIT;`;
-    const escapedDbPath = dbPath.replace(/"/g, '""');
-    const escapedQuery = deleteQuery.replace(/"/g, '""');
-    const command = `"${escapedSqlitePath}" "${escapedDbPath}" "${escapedQuery}"`;
+      const deleteQuery = `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=15000; BEGIN IMMEDIATE TRANSACTION; DELETE FROM urls WHERE id = ${entryId}; DELETE FROM visits WHERE url = ${entryId}; COMMIT;`;
+      const escapedDbPath = dbPath.replace(/"/g, '""');
+      const escapedQuery = deleteQuery.replace(/"/g, '""');
+      const command = `"${escapedSqlitePath}" "${escapedDbPath}" "${escapedQuery}"`;
     
-    execSync(command, { encoding: "utf-8", timeout: 20000 });
+      execSync(command, { encoding: "utf-8", timeout: 20000 });
     clearHistoryCache();
-    return true;
-  } catch {
+      return true;
+      } catch {
     // Strategy 1 failed, try strategy 2
   }
 
   // Strategy 2: Copy database, modify copy, replace original
-  const tempDbPath = path.join(tempDir, `helium_history_delete_${Date.now()}.db`);
+      const tempDbPath = path.join(tempDir, `helium_history_delete_${Date.now()}.db`);
 
   try {
     // Try to copy the database (with retries for locked file)
-    let copied = false;
+      let copied = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        fs.copyFileSync(dbPath, tempDbPath);
-        copied = true;
-        break;
-      } catch {
+        try {
+          fs.copyFileSync(dbPath, tempDbPath);
+          copied = true;
+          break;
+        } catch {
         if (attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 500));
+          }
         }
       }
-    }
 
-    if (!copied) {
+      if (!copied) {
       throw new Error("Could not access database file");
-    }
+      }
 
     // Delete from the temp copy with transaction for atomicity
     const deleteQuery = `BEGIN IMMEDIATE TRANSACTION; DELETE FROM urls WHERE id = ${entryId}; DELETE FROM visits WHERE url = ${entryId}; COMMIT;`;
-    const escapedTempDbPath = tempDbPath.replace(/"/g, '""');
-    const escapedQuery = deleteQuery.replace(/"/g, '""');
-    const command = `"${escapedSqlitePath}" "${escapedTempDbPath}" "${escapedQuery}"`;
+      const escapedTempDbPath = tempDbPath.replace(/"/g, '""');
+      const escapedQuery = deleteQuery.replace(/"/g, '""');
+      const command = `"${escapedSqlitePath}" "${escapedTempDbPath}" "${escapedQuery}"`;
 
     execSync(command, { encoding: "utf-8", timeout: 15000 });
 
     // Try to replace original file (with retries)
-    let replaced = false;
+      let replaced = false;
     for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        fs.copyFileSync(tempDbPath, dbPath);
-        replaced = true;
-        break;
-      } catch {
+        try {
+          fs.copyFileSync(tempDbPath, dbPath);
+          replaced = true;
+          break;
+        } catch {
         if (attempt < 4) {
           await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
         }
+        }
       }
-    }
 
-    // Clean up temp file
-    try {
-      fs.unlinkSync(tempDbPath);
-    } catch {
-      // Ignore cleanup errors
-    }
+      // Clean up temp file
+      try {
+        fs.unlinkSync(tempDbPath);
+      } catch {
+        // Ignore cleanup errors
+      }
 
-    if (!replaced) {
+      if (!replaced) {
       throw new Error("Database is locked. Close Helium browser and try again.");
-    }
+      }
 
-    clearHistoryCache();
-    return true;
-  } catch (error: unknown) {
+        clearHistoryCache();
+        return true;
+    } catch (error: unknown) {
     // Clean up temp file on error
     try {
       fs.unlinkSync(tempDbPath);

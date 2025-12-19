@@ -12,6 +12,31 @@ import * as path from "path";
 import * as os from "os";
 
 const execAsync = promisify(exec);
+// Absolute path to workspace debug log to avoid missing file issues at runtime
+const DEBUG_LOG_PATH = "c:\\Users\\kkosi\\Documents\\My extension\\helium-raycast-extension\\helium-browser-controller\\.cursor\\debug.log";
+
+function logDebug(payload: {
+  sessionId: string;
+  runId: string;
+  hypothesisId: string;
+  location: string;
+  message: string;
+  data?: unknown;
+}) {
+  try {
+    const dir = path.dirname(DEBUG_LOG_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const line = JSON.stringify({
+      ...payload,
+      timestamp: Date.now(),
+    });
+    fs.appendFileSync(DEBUG_LOG_PATH, line + "\n");
+  } catch {
+    // ignore logging errors
+  }
+}
 
 interface BookmarkItem {
   id: string;
@@ -246,6 +271,17 @@ function loadBookmarksFromFile(): BookmarkItem[] {
   }
 
   try {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1',location:'search-bookmarks.tsx:loadBookmarksFromFile',message:'loadBookmarksFromFile start',data:{bookmarksPath,exists:fs.existsSync(bookmarksPath)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    logDebug({
+      sessionId: "debug-session",
+      runId: "pre-fix",
+      hypothesisId: "H1",
+      location: "search-bookmarks.tsx:loadBookmarksFromFile",
+      message: "start",
+      data: { bookmarksPath, exists: fs.existsSync(bookmarksPath) },
+    });
     // Try to read the file directly first
     let bookmarksData: BookmarksFile;
     try {
@@ -369,6 +405,133 @@ async function triggerBookmarkReload(bookmarksPath: string): Promise<void> {
   }
 }
 
+// Delete a single item from bookmarks data structure (helper for batch delete)
+function deleteItemFromData(bookmarksData: BookmarksFile, itemId: string): boolean {
+  if (!bookmarksData.roots) return false;
+  
+  for (const rootKey of ["bookmark_bar", "other", "synced"]) {
+    const root = bookmarksData.roots[rootKey];
+    if (root && root.children && Array.isArray(root.children)) {
+      // First check if item is a direct child of root
+      const directIndex = root.children.findIndex((child: BookmarkNode) => child.id === itemId);
+      if (directIndex >= 0) {
+        root.children.splice(directIndex, 1);
+        return true;
+      }
+
+      // Otherwise search in nested structure
+      const found = findItemInStructure(root, itemId);
+      if (found && found.parent && found.parentIndex >= 0) {
+        if (found.parent.children && Array.isArray(found.parent.children)) {
+          found.parent.children.splice(found.parentIndex, 1);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Delete multiple bookmarks/folders in one operation (avoids file locking issues)
+async function deleteMultipleBookmarkItems(itemIds: string[]): Promise<{ successCount: number; failCount: number }> {
+  const bookmarksPath = findBookmarksFile();
+  if (!bookmarksPath) {
+    throw new Error("Bookmarks file not found");
+  }
+
+  const tempDir = process.env.TEMP || process.env.TMP || os.tmpdir();
+  const tempBookmarksPath = path.join(tempDir, `helium_bookmarks_delete_${Date.now()}.json`);
+  const cleanupTempFile = () => {
+    try {
+      if (fs.existsSync(tempBookmarksPath)) {
+        fs.unlinkSync(tempBookmarksPath);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+  };
+
+  try {
+    // Copy file
+    try {
+      fs.copyFileSync(bookmarksPath, tempBookmarksPath);
+    } catch {
+      throw new Error("Could not copy bookmarks file");
+    }
+
+    // Read and parse
+    const content = fs.readFileSync(tempBookmarksPath, "utf-8");
+    const bookmarksData: BookmarksFile = JSON.parse(content);
+
+    // Delete all items from the structure
+    let successCount = 0;
+    let failCount = 0;
+    for (const itemId of itemIds) {
+      if (deleteItemFromData(bookmarksData, itemId)) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    }
+
+    if (successCount === 0) {
+      throw new Error("No bookmarks found to delete");
+    }
+
+    // Write back to temp file
+    fs.writeFileSync(tempBookmarksPath, JSON.stringify(bookmarksData, null, 2), "utf-8");
+
+    // Replace original file (with retries)
+    let replaced = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        fs.copyFileSync(tempBookmarksPath, bookmarksPath);
+        replaced = true;
+        break;
+      } catch {
+        // Continue to next attempt
+      }
+    }
+
+    if (!replaced) {
+      // #region agent log
+      logDebug({
+        sessionId: "debug-session",
+        runId: "post-fix",
+        hypothesisId: "H1-batch",
+        location: "search-bookmarks.tsx:deleteMultipleBookmarkItems",
+        message: "batch replace failed after retries",
+        data: { attempts: 5, successCount, failCount },
+      });
+      // #endregion
+      throw new Error("Could not replace bookmarks file. Please close Helium browser and try again.");
+    }
+
+    // Trigger browser to reload bookmarks (only once for all deletions)
+    await triggerBookmarkReload(bookmarksPath);
+
+    // #region agent log
+    logDebug({
+      sessionId: "debug-session",
+      runId: "post-fix",
+      hypothesisId: "H1-batch",
+      location: "search-bookmarks.tsx:deleteMultipleBookmarkItems",
+      message: "batch delete success",
+      data: { successCount, failCount },
+    });
+    // #endregion
+
+    return { successCount, failCount };
+  } finally {
+    cleanupTempFile();
+  }
+}
+
 // Delete bookmark or folder from JSON structure
 async function deleteBookmarkItem(itemId: string): Promise<boolean> {
   const bookmarksPath = findBookmarksFile();
@@ -406,6 +569,7 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
 
         // Find and delete item
         let deleted = false;
+        let deletedItemInfo: { name?: string; type?: string; rootKey?: string } = {};
         if (bookmarksData.roots) {
           for (const rootKey of ["bookmark_bar", "other", "synced"]) {
             const root = bookmarksData.roots[rootKey];
@@ -413,6 +577,8 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
               // First check if item is a direct child of root
               const directIndex = root.children.findIndex((child: BookmarkNode) => child.id === itemId);
               if (directIndex >= 0) {
+                const item = root.children[directIndex];
+                deletedItemInfo = { name: item.name, type: item.type, rootKey };
                 root.children.splice(directIndex, 1);
                 deleted = true;
                 break;
@@ -423,6 +589,8 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
               if (found && found.parent && found.parentIndex >= 0) {
                 // Remove from parent's children array by index
                 if (found.parent.children && Array.isArray(found.parent.children)) {
+                  const item = found.parent.children[found.parentIndex];
+                  deletedItemInfo = { name: item?.name, type: item?.type, rootKey };
                   found.parent.children.splice(found.parentIndex, 1);
                   deleted = true;
                   break;
@@ -431,6 +599,17 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
             }
           }
         }
+
+        // #region agent log
+        logDebug({
+          sessionId: "debug-session",
+          runId: "post-fix-v2",
+          hypothesisId: "H2-folder",
+          location: "search-bookmarks.tsx:deleteBookmarkItem",
+          message: "item deletion attempt",
+          data: { itemId, deleted, deletedItemInfo },
+        });
+        // #endregion
 
         if (!deleted) {
           throw new Error("Bookmark not found in structure");
@@ -457,12 +636,69 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
         }
 
         if (!replaced) {
+          // #region agent log
+          fetch('http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2',location:'search-bookmarks.tsx:deleteBookmarkItem',message:'replace failed after retries',data:{attempts:5},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          logDebug({
+            sessionId: "debug-session",
+            runId: "pre-fix",
+            hypothesisId: "H2",
+            location: "search-bookmarks.tsx:deleteBookmarkItem",
+            message: "replace failed after retries",
+            data: { attempts: 5 },
+          });
           throw new Error("Could not replace bookmarks file. Please close Helium browser and try again.");
         }
+
+        // #region agent log - verify file was actually modified
+        try {
+          const verifyContent = fs.readFileSync(bookmarksPath, "utf-8");
+          const verifyData = JSON.parse(verifyContent);
+          // Check if item still exists
+          let stillExists = false;
+          if (verifyData.roots) {
+            for (const rootKey of ["bookmark_bar", "other", "synced"]) {
+              const root = verifyData.roots[rootKey];
+              if (root) {
+                const found = findItemInStructure(root, itemId);
+                if (found) {
+                  stillExists = true;
+                  break;
+                }
+                // Also check direct children
+                if (root.children?.some((c: BookmarkNode) => c.id === itemId)) {
+                  stillExists = true;
+                  break;
+                }
+              }
+            }
+          }
+          logDebug({
+            sessionId: "debug-session",
+            runId: "post-fix-v2",
+            hypothesisId: "H1-overwrite",
+            location: "search-bookmarks.tsx:deleteBookmarkItem",
+            message: "post-write verification",
+            data: { itemId, stillExists, fileSize: verifyContent.length },
+          });
+        } catch {
+          // Ignore verification errors
+        }
+        // #endregion
 
         // Trigger browser to reload bookmarks
         await triggerBookmarkReload(bookmarksPath);
 
+        // #region agent log
+        logDebug({
+          sessionId: "debug-session",
+          runId: "post-fix-v2",
+          hypothesisId: "H2",
+          location: "search-bookmarks.tsx:deleteBookmarkItem",
+          message: "delete strategy success",
+          data: { replaced: true, itemId, deletedItemInfo },
+        });
+        // #endregion
         return true;
       } finally {
         cleanupTempFile();
@@ -667,18 +903,10 @@ export default function Command() {
 
     try {
       setIsLoading(true);
-      let successCount = 0;
-      let failCount = 0;
 
-      // Delete all selected items
-      for (const itemId of selectedItems) {
-        try {
-          await deleteBookmarkItem(itemId);
-          successCount++;
-        } catch {
-          failCount++;
-        }
-      }
+      // Use batch delete to handle all items in one file operation
+      const itemIds = Array.from(selectedItems);
+      const { successCount, failCount } = await deleteMultipleBookmarkItems(itemIds);
 
       // Clear selection
       setSelectedItems(new Set());
@@ -689,19 +917,23 @@ export default function Command() {
       cacheTimestamp = 0;
 
       if (successCount > 0) {
-        const failMessage = failCount > 0 ? ` (${failCount} failed)` : "";
+        const failMessage = failCount > 0 ? ` (${failCount} not found)` : "";
         await showToast({
           style: failCount > 0 ? Toast.Style.Animated : Toast.Style.Success,
           title: "Items deleted",
           message: `Deleted ${successCount} item${successCount === 1 ? "" : "s"}${failMessage}. Close and reopen browser to see changes`,
         });
-      } else if (failCount > 0) {
-        await showToast({
-          style: Toast.Style.Failure,
-          title: "Delete failed",
-          message: `All ${failCount} deletion${failCount === 1 ? "" : "s"} failed. Close browser and try again.`,
-        });
       }
+      // #region agent log
+      logDebug({
+        sessionId: "debug-session",
+        runId: "post-fix",
+        hypothesisId: "H1-batch",
+        location: "search-bookmarks.tsx:handleBulkDelete",
+        message: "bulk delete summary",
+        data: { successCount, failCount },
+      });
+      // #endregion
 
       try {
         setError(null);
