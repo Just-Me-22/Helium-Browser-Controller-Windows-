@@ -92,9 +92,11 @@ async function findHeliumPath(): Promise<string | null> {
 
 async function launchWindow(heliumPath: string): Promise<boolean> {
   const escapedPath = heliumPath.replace(/'/g, "''").replace(/"/g, '\\"');
-  
+
   try {
-    await execAsync(`powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '--profile-directory=Default' -ErrorAction Stop"`);
+    await execAsync(
+      `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '--profile-directory=Default' -ErrorAction Stop"`,
+    );
     return true;
   } catch {
     try {
@@ -104,7 +106,7 @@ async function launchWindow(heliumPath: string): Promise<boolean> {
       // Ignore
     }
   }
-  
+
   return false;
 }
 

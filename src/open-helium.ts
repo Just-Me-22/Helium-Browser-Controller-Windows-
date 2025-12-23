@@ -31,7 +31,7 @@ function getHeliumCandidatePaths(): string[] {
     path.join(localAppData, "Programs", "Helium", "Helium.exe"),
     path.join(localAppData, "Helium", "Helium.exe"),
     path.join(programFiles, "Helium", "Helium.exe"),
-    path.join(programFilesX86, "Helium", "Helium.exe")
+    path.join(programFilesX86, "Helium", "Helium.exe"),
   );
 
   return candidates;
@@ -67,4 +67,3 @@ export default async function main() {
     await showHUD("❌ Failed to open Helium");
   }
 }
-

@@ -13,7 +13,8 @@ import * as os from "os";
 
 const execAsync = promisify(exec);
 // Absolute path to workspace debug log to avoid missing file issues at runtime
-const DEBUG_LOG_PATH = "c:\\Users\\kkosi\\Documents\\My extension\\helium-raycast-extension\\helium-browser-controller\\.cursor\\debug.log";
+const DEBUG_LOG_PATH =
+  "c:\\Users\\kkosi\\Documents\\My extension\\helium-raycast-extension\\helium-browser-controller\\.cursor\\debug.log";
 
 function logDebug(payload: {
   sessionId: string;
@@ -217,7 +218,7 @@ function flattenBookmarks(node: BookmarkNode, parentPath: string[] = [], rootNam
       // Add folder to path
       currentPath.push(node.name);
       const folderPath = currentPath.join(" > ");
-      
+
       // Create folder item
       const folderItem: BookmarkItem = {
         id: node.id || `folder_${node.name}_${Date.now()}`,
@@ -272,7 +273,19 @@ function loadBookmarksFromFile(): BookmarkItem[] {
 
   try {
     // #region agent log
-    fetch('http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1',location:'search-bookmarks.tsx:loadBookmarksFromFile',message:'loadBookmarksFromFile start',data:{bookmarksPath,exists:fs.existsSync(bookmarksPath)},timestamp:Date.now()})}).catch(()=>{});
+    fetch("http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "debug-session",
+        runId: "pre-fix",
+        hypothesisId: "H1",
+        location: "search-bookmarks.tsx:loadBookmarksFromFile",
+        message: "loadBookmarksFromFile start",
+        data: { bookmarksPath, exists: fs.existsSync(bookmarksPath) },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
     // #endregion
     logDebug({
       sessionId: "debug-session",
@@ -291,7 +304,7 @@ function loadBookmarksFromFile(): BookmarkItem[] {
       // If file is locked, try copying it first
       const tempDir = process.env.TEMP || process.env.TMP || os.tmpdir();
       const tempBookmarksPath = path.join(tempDir, `helium_bookmarks_${Date.now()}.json`);
-      
+
       try {
         fs.copyFileSync(bookmarksPath, tempBookmarksPath);
         const content = fs.readFileSync(tempBookmarksPath, "utf-8");
@@ -348,7 +361,7 @@ function loadBookmarks(searchQuery: string = ""): BookmarkItem[] {
     (item) =>
       item.name.toLowerCase().includes(query) ||
       (item.url && item.url.toLowerCase().includes(query)) ||
-      item.path.toLowerCase().includes(query)
+      item.path.toLowerCase().includes(query),
   );
 }
 
@@ -357,7 +370,7 @@ function findItemInStructure(
   structure: BookmarkNode,
   targetId: string,
   parent: BookmarkNode | null = null,
-  parentPath: string[] = []
+  parentPath: string[] = [],
 ): BookmarkSearchResult | null {
   if (!structure || typeof structure !== "object") {
     return null;
@@ -392,11 +405,13 @@ async function triggerBookmarkReload(bookmarksPath: string): Promise<void> {
     // Method 1: Update the file's modification time to trigger a reload
     const now = new Date();
     fs.utimesSync(bookmarksPath, now, now);
-    
+
     // Method 2: Send F5 to the browser window to trigger a refresh of any open bookmark manager
     // This uses PowerShell to send keystrokes to Helium/Chrome window
     try {
-      await execAsync(`powershell -Command "$wshell = New-Object -ComObject wscript.shell; $proc = Get-Process chrome -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -First 1; if ($proc) { [void]$wshell.AppActivate($proc.Id); Start-Sleep -Milliseconds 100; $wshell.SendKeys('{F5}'); Start-Sleep -Milliseconds 100 }"`);
+      await execAsync(
+        `powershell -Command "$wshell = New-Object -ComObject wscript.shell; $proc = Get-Process chrome -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -First 1; if ($proc) { [void]$wshell.AppActivate($proc.Id); Start-Sleep -Milliseconds 100; $wshell.SendKeys('{F5}'); Start-Sleep -Milliseconds 100 }"`,
+      );
     } catch {
       // Ignore - browser may not have bookmark manager open
     }
@@ -408,7 +423,7 @@ async function triggerBookmarkReload(bookmarksPath: string): Promise<void> {
 // Delete a single item from bookmarks data structure (helper for batch delete)
 function deleteItemFromData(bookmarksData: BookmarksFile, itemId: string): boolean {
   if (!bookmarksData.roots) return false;
-  
+
   for (const rootKey of ["bookmark_bar", "other", "synced"]) {
     const root = bookmarksData.roots[rootKey];
     if (root && root.children && Array.isArray(root.children)) {
@@ -637,7 +652,19 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
 
         if (!replaced) {
           // #region agent log
-          fetch('http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2',location:'search-bookmarks.tsx:deleteBookmarkItem',message:'replace failed after retries',data:{attempts:5},timestamp:Date.now()})}).catch(()=>{});
+          fetch("http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: "debug-session",
+              runId: "pre-fix",
+              hypothesisId: "H2",
+              location: "search-bookmarks.tsx:deleteBookmarkItem",
+              message: "replace failed after retries",
+              data: { attempts: 5 },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
           // #endregion
           logDebug({
             sessionId: "debug-session",
@@ -736,7 +763,7 @@ async function findHeliumPath(): Promise<string | null> {
       path.join(localAppData, "imput", "Helium", "Application", "chrome.exe"),
       path.join(localAppData, "imput", "Helium", "Helium.exe"),
       path.join(localAppData, "Programs", "Helium", "Helium.exe"),
-      path.join(localAppData, "Helium", "Helium.exe")
+      path.join(localAppData, "Helium", "Helium.exe"),
     );
   }
 
@@ -767,7 +794,7 @@ async function launchURL(url: string): Promise<boolean> {
     const escapedUrl = url.replace(/'/g, "''").replace(/"/g, '\\"');
 
     await execAsync(
-      `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '${escapedUrl}' -ErrorAction Stop"`
+      `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '${escapedUrl}' -ErrorAction Stop"`,
     );
     return true;
   } catch {
@@ -986,9 +1013,7 @@ export default function Command() {
   return (
     <List
       isLoading={isLoading}
-      searchBarPlaceholder={
-        isSelectionMode ? `Select items (${selectedItems.size} selected)` : "Search bookmarks..."
-      }
+      searchBarPlaceholder={isSelectionMode ? `Select items (${selectedItems.size} selected)` : "Search bookmarks..."}
       onSearchTextChange={setSearchText}
       throttle
       isShowingDetail={!isSelectionMode}
@@ -1096,11 +1121,7 @@ export default function Command() {
                   ) : (
                     <>
                       {item.url && (
-                        <Action
-                          title="Open in Helium"
-                          icon={Icon.Globe}
-                          onAction={() => handleOpenURL(item.url!)}
-                        />
+                        <Action title="Open in Helium" icon={Icon.Globe} onAction={() => handleOpenURL(item.url!)} />
                       )}
                       <Action
                         title={`Delete ${item.isFolder ? "Folder" : "Bookmark"}`}
@@ -1144,4 +1165,3 @@ export default function Command() {
     </List>
   );
 }
-
