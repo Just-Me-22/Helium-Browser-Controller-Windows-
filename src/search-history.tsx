@@ -245,29 +245,17 @@ function clearHistoryCache() {
 }
 
 function getSqlite3Path(): string {
-  // Get the directory of the current module more reliably
-  const currentDir = path.dirname(require.main?.filename || __dirname);
-
-  // Try multiple strategies to find the extension root
-  const possibleRoots = [
-    currentDir, // Current script directory
-    path.dirname(currentDir), // Parent directory
-    path.dirname(path.dirname(currentDir)), // Grandparent directory
-    process.cwd(), // Current working directory
+  // Try the most likely paths first
+  const possiblePaths = [
+    path.join(__dirname, "..", "assets", "sqlite3.exe"),
+    path.join(__dirname, "..", "bin", "sqlite3.exe"),
+    path.join(process.cwd(), "assets", "sqlite3.exe"),
+    path.join(process.cwd(), "bin", "sqlite3.exe"),
   ];
 
-  // For each possible root, try common sqlite3.exe locations
-  for (const root of possibleRoots) {
-    const possiblePaths = [
-      path.join(root, "assets", "sqlite3.exe"),
-      path.join(root, "bin", "sqlite3.exe"),
-      path.join(root, "sqlite3.exe"),
-    ];
-
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        return p;
-      }
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      return p;
     }
   }
 
