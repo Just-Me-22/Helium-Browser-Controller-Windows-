@@ -247,7 +247,7 @@ function clearHistoryCache() {
 function getSqlite3Path(): string {
   console.log("__dirname:", __dirname);
   console.log("process.cwd():", process.cwd());
-  
+
   // Try every possible combination
   const possiblePaths = [
     path.join(__dirname, "..", "assets", "sqlite3.exe"),
