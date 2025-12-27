@@ -1,5 +1,5 @@
 import { showHUD } from "@raycast/api";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
@@ -101,14 +101,29 @@ async function findHeliumPath(): Promise<string | null> {
 
 // Launch private window
 async function launchPrivateWindow(heliumPath: string): Promise<boolean> {
-  const flags = ["--incognito", "--private-window", "--inprivate", "-private"];
-  const escapedPath = heliumPath.replace(/'/g, "''").replace(/"/g, '\\"');
+  // Validate path exists (security check)
+  if (!fs.existsSync(heliumPath)) {
+    return false;
+  }
 
-  // Try PowerShell Start-Process with different flags
+  const flags = ["--incognito", "--private-window", "--inprivate", "-private"];
+
+  // Strategy 1: Use spawn with each flag (safest - no shell injection)
+  for (const flag of flags) {
+    try {
+      spawn(heliumPath, [flag], { detached: true, stdio: "ignore" }).unref();
+      return true;
+    } catch {
+      // Continue to next flag
+    }
+  }
+
+  // Strategy 2: PowerShell Start-Process with different flags (with proper escaping)
+  const escapedPathPS = heliumPath.replace(/'/g, "''");
   for (const flag of flags) {
     try {
       await execAsync(
-        `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '${flag}' -ErrorAction Stop"`,
+        `powershell -Command "Start-Process -FilePath '${escapedPathPS}' -ArgumentList '${flag}' -ErrorAction Stop"`,
       );
       return true;
     } catch {
@@ -116,12 +131,16 @@ async function launchPrivateWindow(heliumPath: string): Promise<boolean> {
     }
   }
 
-  // Fallback: cmd start
+  // Strategy 3: CMD start (with proper escaping)
   try {
-    await execAsync(`cmd /c start "" "${heliumPath}" --incognito`);
+    const escapedPathCMD = heliumPath.replace(/"/g, '""');
+    await execAsync(`cmd /c start "" "${escapedPathCMD}" --incognito`);
     return true;
-  } catch {
-    // Ignore
+  } catch (error: unknown) {
+    console.error(
+      "[LaunchPrivateWindow] All strategies failed:",
+      error instanceof Error ? error.message : String(error),
+    );
   }
 
   return false;

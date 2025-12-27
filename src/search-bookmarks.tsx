@@ -5,39 +5,23 @@
 
 import { List, showToast, Toast, Action, ActionPanel, Icon, showHUD, confirmAlert, Alert } from "@raycast/api";
 import { useState, useEffect, useCallback } from "react";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 const execAsync = promisify(exec);
-// Absolute path to workspace debug log to avoid missing file issues at runtime
-const DEBUG_LOG_PATH =
-  "c:\\Users\\kkosi\\Documents\\My extension\\helium-raycast-extension\\helium-browser-controller\\.cursor\\debug.log";
 
-function logDebug(payload: {
-  sessionId: string;
-  runId: string;
-  hypothesisId: string;
-  location: string;
-  message: string;
-  data?: unknown;
-}) {
-  try {
-    const dir = path.dirname(DEBUG_LOG_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const line = JSON.stringify({
-      ...payload,
-      timestamp: Date.now(),
-    });
-    fs.appendFileSync(DEBUG_LOG_PATH, line + "\n");
-  } catch {
-    // ignore logging errors
-  }
-}
+const CACHE_TTL_MS = 60000;
+const MAX_FILE_REPLACE_ATTEMPTS = 5;
+const RETRY_DELAY_BASE_MS = 300;
+const INITIAL_RETRY_DELAY_MS = 500;
+const CHROMIUM_EPOCH_OFFSET_SECONDS = 11644473600;
+const MICROSECONDS_PER_SECOND = 1000000;
+const MS_PER_MINUTE = 60000;
+const MS_PER_HOUR = 3600000;
+const MS_PER_DAY = 86400000;
 
 interface BookmarkItem {
   id: string;
@@ -153,9 +137,7 @@ function getBookmarksFileCandidates(): string[] {
 }
 
 function convertChromiumTimestamp(timestamp: number): Date {
-  // Chromium timestamps are in microseconds since Windows epoch (1601-01-01)
-  // Convert to Unix timestamp: (timestamp / 1000000) - 11644473600
-  const unixTimestamp = timestamp / 1000000 - 11644473600;
+  const unixTimestamp = timestamp / MICROSECONDS_PER_SECOND - CHROMIUM_EPOCH_OFFSET_SECONDS;
   return new Date(unixTimestamp * 1000);
 }
 
@@ -180,9 +162,9 @@ function getFaviconUrl(url: string): string {
 function formatDate(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+  const diffMins = Math.floor(diffMs / MS_PER_MINUTE);
+  const diffHours = Math.floor(diffMs / MS_PER_HOUR);
+  const diffDays = Math.floor(diffMs / MS_PER_DAY);
 
   if (diffMins < 1) {
     return "Just now";
@@ -200,7 +182,6 @@ function formatDate(date: Date): string {
 // Cache for loaded bookmarks
 let cachedBookmarks: BookmarkItem[] | null = null;
 let cacheTimestamp: number = 0;
-const CACHE_TTL_MS = 60000; // Cache for 1 minute
 
 function clearBookmarksCache() {
   cachedBookmarks = null;
@@ -272,29 +253,6 @@ function loadBookmarksFromFile(): BookmarkItem[] {
   }
 
   try {
-    // #region agent log
-    fetch("http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H1",
-        location: "search-bookmarks.tsx:loadBookmarksFromFile",
-        message: "loadBookmarksFromFile start",
-        data: { bookmarksPath, exists: fs.existsSync(bookmarksPath) },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
-    logDebug({
-      sessionId: "debug-session",
-      runId: "pre-fix",
-      hypothesisId: "H1",
-      location: "search-bookmarks.tsx:loadBookmarksFromFile",
-      message: "start",
-      data: { bookmarksPath, exists: fs.existsSync(bookmarksPath) },
-    });
     // Try to read the file directly first
     let bookmarksData: BookmarksFile;
     try {
@@ -496,14 +454,13 @@ async function deleteMultipleBookmarkItems(itemIds: string[]): Promise<{ success
     // Write back to temp file
     fs.writeFileSync(tempBookmarksPath, JSON.stringify(bookmarksData, null, 2), "utf-8");
 
-    // Replace original file (with retries)
     let replaced = false;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < MAX_FILE_REPLACE_ATTEMPTS; attempt++) {
       try {
         if (attempt > 0) {
-          await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_BASE_MS * (attempt + 1)));
         } else {
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, INITIAL_RETRY_DELAY_MS));
         }
         fs.copyFileSync(tempBookmarksPath, bookmarksPath);
         replaced = true;
@@ -514,32 +471,11 @@ async function deleteMultipleBookmarkItems(itemIds: string[]): Promise<{ success
     }
 
     if (!replaced) {
-      // #region agent log
-      logDebug({
-        sessionId: "debug-session",
-        runId: "post-fix",
-        hypothesisId: "H1-batch",
-        location: "search-bookmarks.tsx:deleteMultipleBookmarkItems",
-        message: "batch replace failed after retries",
-        data: { attempts: 5, successCount, failCount },
-      });
-      // #endregion
       throw new Error("Could not replace bookmarks file. Please close Helium browser and try again.");
     }
 
     // Trigger browser to reload bookmarks (only once for all deletions)
     await triggerBookmarkReload(bookmarksPath);
-
-    // #region agent log
-    logDebug({
-      sessionId: "debug-session",
-      runId: "post-fix",
-      hypothesisId: "H1-batch",
-      location: "search-bookmarks.tsx:deleteMultipleBookmarkItems",
-      message: "batch delete success",
-      data: { successCount, failCount },
-    });
-    // #endregion
 
     return { successCount, failCount };
   } finally {
@@ -584,7 +520,6 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
 
         // Find and delete item
         let deleted = false;
-        let deletedItemInfo: { name?: string; type?: string; rootKey?: string } = {};
         if (bookmarksData.roots) {
           for (const rootKey of ["bookmark_bar", "other", "synced"]) {
             const root = bookmarksData.roots[rootKey];
@@ -592,8 +527,6 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
               // First check if item is a direct child of root
               const directIndex = root.children.findIndex((child: BookmarkNode) => child.id === itemId);
               if (directIndex >= 0) {
-                const item = root.children[directIndex];
-                deletedItemInfo = { name: item.name, type: item.type, rootKey };
                 root.children.splice(directIndex, 1);
                 deleted = true;
                 break;
@@ -604,8 +537,6 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
               if (found && found.parent && found.parentIndex >= 0) {
                 // Remove from parent's children array by index
                 if (found.parent.children && Array.isArray(found.parent.children)) {
-                  const item = found.parent.children[found.parentIndex];
-                  deletedItemInfo = { name: item?.name, type: item?.type, rootKey };
                   found.parent.children.splice(found.parentIndex, 1);
                   deleted = true;
                   break;
@@ -615,17 +546,6 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
           }
         }
 
-        // #region agent log
-        logDebug({
-          sessionId: "debug-session",
-          runId: "post-fix-v2",
-          hypothesisId: "H2-folder",
-          location: "search-bookmarks.tsx:deleteBookmarkItem",
-          message: "item deletion attempt",
-          data: { itemId, deleted, deletedItemInfo },
-        });
-        // #endregion
-
         if (!deleted) {
           throw new Error("Bookmark not found in structure");
         }
@@ -633,14 +553,13 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
         // Write back to temp file
         fs.writeFileSync(tempBookmarksPath, JSON.stringify(bookmarksData, null, 2), "utf-8");
 
-        // Replace original file (with retries)
         let replaced = false;
-        for (let attempt = 0; attempt < 5; attempt++) {
+        for (let attempt = 0; attempt < MAX_FILE_REPLACE_ATTEMPTS; attempt++) {
           try {
             if (attempt > 0) {
-              await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+              await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_BASE_MS * (attempt + 1)));
             } else {
-              await new Promise((resolve) => setTimeout(resolve, 500));
+              await new Promise((resolve) => setTimeout(resolve, INITIAL_RETRY_DELAY_MS));
             }
             fs.copyFileSync(tempBookmarksPath, bookmarksPath);
             replaced = true;
@@ -651,81 +570,12 @@ async function deleteBookmarkItem(itemId: string): Promise<boolean> {
         }
 
         if (!replaced) {
-          // #region agent log
-          fetch("http://127.0.0.1:7243/ingest/5bb3eab4-8130-43e7-9cf3-89f1ff6f6f7a", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: "debug-session",
-              runId: "pre-fix",
-              hypothesisId: "H2",
-              location: "search-bookmarks.tsx:deleteBookmarkItem",
-              message: "replace failed after retries",
-              data: { attempts: 5 },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
-          logDebug({
-            sessionId: "debug-session",
-            runId: "pre-fix",
-            hypothesisId: "H2",
-            location: "search-bookmarks.tsx:deleteBookmarkItem",
-            message: "replace failed after retries",
-            data: { attempts: 5 },
-          });
           throw new Error("Could not replace bookmarks file. Please close Helium browser and try again.");
         }
-
-        // #region agent log - verify file was actually modified
-        try {
-          const verifyContent = fs.readFileSync(bookmarksPath, "utf-8");
-          const verifyData = JSON.parse(verifyContent);
-          // Check if item still exists
-          let stillExists = false;
-          if (verifyData.roots) {
-            for (const rootKey of ["bookmark_bar", "other", "synced"]) {
-              const root = verifyData.roots[rootKey];
-              if (root) {
-                const found = findItemInStructure(root, itemId);
-                if (found) {
-                  stillExists = true;
-                  break;
-                }
-                // Also check direct children
-                if (root.children?.some((c: BookmarkNode) => c.id === itemId)) {
-                  stillExists = true;
-                  break;
-                }
-              }
-            }
-          }
-          logDebug({
-            sessionId: "debug-session",
-            runId: "post-fix-v2",
-            hypothesisId: "H1-overwrite",
-            location: "search-bookmarks.tsx:deleteBookmarkItem",
-            message: "post-write verification",
-            data: { itemId, stillExists, fileSize: verifyContent.length },
-          });
-        } catch {
-          // Ignore verification errors
-        }
-        // #endregion
 
         // Trigger browser to reload bookmarks
         await triggerBookmarkReload(bookmarksPath);
 
-        // #region agent log
-        logDebug({
-          sessionId: "debug-session",
-          runId: "post-fix-v2",
-          hypothesisId: "H2",
-          location: "search-bookmarks.tsx:deleteBookmarkItem",
-          message: "delete strategy success",
-          data: { replaced: true, itemId, deletedItemInfo },
-        });
-        // #endregion
         return true;
       } finally {
         cleanupTempFile();
@@ -789,22 +639,50 @@ async function launchURL(url: string): Promise<boolean> {
     return false;
   }
 
+  // Validate path exists (security check)
+  if (!fs.existsSync(heliumPath)) {
+    return false;
+  }
+
+  // Validate URL to prevent command injection
   try {
-    const escapedPath = heliumPath.replace(/'/g, "''").replace(/"/g, '\\"');
-    const escapedUrl = url.replace(/'/g, "''").replace(/"/g, '\\"');
+    new URL(url);
+  } catch {
+    return false;
+  }
+
+  // Strategy 1: Use spawn (safest - no shell injection)
+  try {
+    spawn(heliumPath, [url], { detached: true, stdio: "ignore" }).unref();
+    return true;
+  } catch {
+    // Continue to fallback strategies
+  }
+
+  // Strategy 2: PowerShell Start-Process (with proper escaping for PowerShell)
+  try {
+    const escapedPath = heliumPath.replace(/'/g, "''");
+    const escapedUrl = url.replace(/'/g, "''");
 
     await execAsync(
       `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '${escapedUrl}' -ErrorAction Stop"`,
     );
     return true;
   } catch {
-    try {
-      await execAsync(`cmd /c start "" "${heliumPath}" "${url}"`);
-      return true;
-    } catch {
-      return false;
-    }
+    // Continue to next strategy
   }
+
+  // Strategy 3: CMD start (with proper escaping for CMD)
+  try {
+    const escapedPath = heliumPath.replace(/"/g, '""');
+    const escapedUrl = url.replace(/"/g, '""');
+    await execAsync(`cmd /c start "" "${escapedPath}" "${escapedUrl}"`);
+    return true;
+  } catch (error: unknown) {
+    console.error("[LaunchURL] All strategies failed:", error instanceof Error ? error.message : String(error));
+  }
+
+  return false;
 }
 
 export default function Command() {
@@ -951,16 +829,6 @@ export default function Command() {
           message: `Deleted ${successCount} item${successCount === 1 ? "" : "s"}${failMessage}. Close and reopen browser to see changes`,
         });
       }
-      // #region agent log
-      logDebug({
-        sessionId: "debug-session",
-        runId: "post-fix",
-        hypothesisId: "H1-batch",
-        location: "search-bookmarks.tsx:handleBulkDelete",
-        message: "bulk delete summary",
-        data: { successCount, failCount },
-      });
-      // #endregion
 
       try {
         setError(null);

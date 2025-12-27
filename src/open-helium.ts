@@ -1,5 +1,5 @@
 import { showHUD, getPreferenceValues } from "@raycast/api";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
@@ -59,9 +59,22 @@ export default async function main() {
       return;
     }
 
-    // Use cmd.exe to launch the browser (more reliable on Windows)
-    await execAsync(`start "" "${heliumPath}"`);
-    await showHUD("✅ Helium opened");
+    // Validate path exists (security check)
+    if (!existsFile(heliumPath)) {
+      await showHUD("❌ Invalid Helium path in preferences");
+      return;
+    }
+
+    // Use spawn instead of shell execution (safer - prevents command injection)
+    try {
+      spawn(heliumPath, [], { detached: true, stdio: "ignore" }).unref();
+      await showHUD("✅ Helium opened");
+    } catch {
+      // Fallback to CMD with proper escaping
+      const escapedPath = heliumPath.replace(/"/g, '""');
+      await execAsync(`cmd /c start "" "${escapedPath}"`);
+      await showHUD("✅ Helium opened");
+    }
   } catch (e) {
     console.error("Error launching Helium:", e);
     await showHUD("❌ Failed to open Helium");

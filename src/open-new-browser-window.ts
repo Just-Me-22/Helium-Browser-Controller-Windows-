@@ -1,5 +1,5 @@
 import { showHUD } from "@raycast/api";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
@@ -91,20 +91,37 @@ async function findHeliumPath(): Promise<string | null> {
 }
 
 async function launchWindow(heliumPath: string): Promise<boolean> {
-  const escapedPath = heliumPath.replace(/'/g, "''").replace(/"/g, '\\"');
+  // Validate path exists (security check)
+  if (!fs.existsSync(heliumPath)) {
+    return false;
+  }
 
+  // Strategy 1: Use spawn (safest - no shell injection)
   try {
+    spawn(heliumPath, ["--profile-directory=Default"], { detached: true, stdio: "ignore" }).unref();
+    return true;
+  } catch {
+    // Continue to fallback strategies
+  }
+
+  // Strategy 2: PowerShell Start-Process (with proper escaping)
+  try {
+    const escapedPath = heliumPath.replace(/'/g, "''");
     await execAsync(
       `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '--profile-directory=Default' -ErrorAction Stop"`,
     );
     return true;
   } catch {
-    try {
-      await execAsync(`cmd /c start "" "${heliumPath}" --profile-directory="Default"`);
-      return true;
-    } catch {
-      // Ignore
-    }
+    // Continue to next strategy
+  }
+
+  // Strategy 3: CMD start (with proper escaping)
+  try {
+    const escapedPath = heliumPath.replace(/"/g, '""');
+    await execAsync(`cmd /c start "" "${escapedPath}" --profile-directory="Default"`);
+    return true;
+  } catch (error: unknown) {
+    console.error("[LaunchWindow] All strategies failed:", error instanceof Error ? error.message : String(error));
   }
 
   return false;

@@ -5,13 +5,25 @@
 
 import { List, showToast, Toast, Action, ActionPanel, Icon, showHUD, confirmAlert, Alert } from "@raycast/api";
 import { useState, useEffect, useCallback } from "react";
-import { execSync, exec } from "child_process";
+import { execSync, exec, spawn } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 const execAsync = promisify(exec);
+
+const CACHE_TTL_MS = 60000;
+const MAX_RESULTS = 500;
+const DB_QUERY_TIMEOUT_MS = 30000;
+const DB_MAX_BUFFER_BYTES = 10485760;
+const DB_BUSY_TIMEOUT_MS = 15000;
+const MAX_FILE_REPLACE_ATTEMPTS = 5;
+const CHROMIUM_EPOCH_OFFSET_SECONDS = 11644473600;
+const MICROSECONDS_PER_SECOND = 1000000;
+const MS_PER_MINUTE = 60000;
+const MS_PER_HOUR = 3600000;
+const MS_PER_DAY = 86400000;
 
 interface HistoryItem {
   id: number;
@@ -20,92 +32,6 @@ interface HistoryItem {
   visitCount: number;
   lastVisitTime: number;
   lastVisitDate: Date;
-}
-
-// Get LocalAppData path using multiple methods
-function getLocalAppDataPathsForHelium(): string[] {
-  const paths: string[] = [];
-
-  if (process.env.LOCALAPPDATA) {
-    paths.push(process.env.LOCALAPPDATA);
-  }
-
-  if (process.env.USERPROFILE) {
-    const candidate = path.join(process.env.USERPROFILE, "AppData", "Local");
-    if (!paths.includes(candidate)) paths.push(candidate);
-  }
-
-  try {
-    const homeDir = os.homedir();
-    if (homeDir) {
-      const candidate = path.join(homeDir, "AppData", "Local");
-      if (!paths.includes(candidate)) paths.push(candidate);
-    }
-  } catch {
-    // Ignore
-  }
-
-  return paths;
-}
-
-// Get all possible Helium installation paths
-function getHeliumPaths(): string[] {
-  const paths: string[] = [];
-  const localAppDataPaths = getLocalAppDataPathsForHelium();
-
-  const homeDir = os.homedir();
-  if (homeDir) {
-    paths.push(path.join(homeDir, "AppData", "Local", "imput", "Helium", "Application", "chrome.exe"));
-  }
-
-  for (const localAppData of localAppDataPaths) {
-    paths.push(path.join(localAppData, "imput", "Helium", "Application", "chrome.exe"));
-    paths.push(path.join(localAppData, "imput", "Helium", "Helium.exe"));
-    paths.push(path.join(localAppData, "Programs", "Helium", "Helium.exe"));
-    paths.push(path.join(localAppData, "Helium", "Helium.exe"));
-  }
-
-  if (process.env.PROGRAMFILES) {
-    paths.push(path.join(process.env.PROGRAMFILES, "Helium", "Helium.exe"));
-  }
-  if (process.env["PROGRAMFILES(X86)"]) {
-    paths.push(path.join(process.env["PROGRAMFILES(X86)"], "Helium", "Helium.exe"));
-  }
-
-  return paths;
-}
-
-// Find Helium executable
-async function findHeliumPath(): Promise<string | null> {
-  for (const p of getHeliumPaths()) {
-    if (fs.existsSync(p)) {
-      return p;
-    }
-  }
-
-  try {
-    const { stdout } = await execAsync(
-      `powershell -Command "Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Helium.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty '(default)'"`,
-    );
-    const registryPath = stdout.trim();
-    if (registryPath && fs.existsSync(registryPath)) {
-      return registryPath;
-    }
-  } catch {
-    // Ignore
-  }
-
-  try {
-    const { stdout } = await execAsync(`where Helium.exe`);
-    const wherePath = stdout.trim().split("\n")[0];
-    if (wherePath && fs.existsSync(wherePath)) {
-      return wherePath;
-    }
-  } catch {
-    // Ignore
-  }
-
-  return null;
 }
 
 function getLocalAppDataPaths(): string[] {
@@ -133,10 +59,68 @@ function getLocalAppDataPaths(): string[] {
       }
     }
   } catch {
-    // Ignore errors
+    // os.homedir() can fail in some environments
   }
 
   return paths;
+}
+
+function getHeliumPaths(): string[] {
+  const paths: string[] = [];
+  const localAppDataPaths = getLocalAppDataPaths();
+
+  const homeDir = os.homedir();
+  if (homeDir) {
+    paths.push(path.join(homeDir, "AppData", "Local", "imput", "Helium", "Application", "chrome.exe"));
+  }
+
+  for (const localAppData of localAppDataPaths) {
+    paths.push(path.join(localAppData, "imput", "Helium", "Application", "chrome.exe"));
+    paths.push(path.join(localAppData, "imput", "Helium", "Helium.exe"));
+    paths.push(path.join(localAppData, "Programs", "Helium", "Helium.exe"));
+    paths.push(path.join(localAppData, "Helium", "Helium.exe"));
+  }
+
+  if (process.env.PROGRAMFILES) {
+    paths.push(path.join(process.env.PROGRAMFILES, "Helium", "Helium.exe"));
+  }
+  if (process.env["PROGRAMFILES(X86)"]) {
+    paths.push(path.join(process.env["PROGRAMFILES(X86)"], "Helium", "Helium.exe"));
+  }
+
+  return paths;
+}
+
+async function findHeliumPath(): Promise<string | null> {
+  for (const p of getHeliumPaths()) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+
+  try {
+    const { stdout } = await execAsync(
+      `powershell -Command "Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Helium.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty '(default)'"`,
+    );
+    const registryPath = stdout.trim();
+    if (registryPath && fs.existsSync(registryPath)) {
+      return registryPath;
+    }
+  } catch {
+    // Registry lookup can fail if key doesn't exist
+  }
+
+  try {
+    const { stdout } = await execAsync(`where Helium.exe`);
+    const wherePath = stdout.trim().split("\n")[0];
+    if (wherePath && fs.existsSync(wherePath)) {
+      return wherePath;
+    }
+  } catch {
+    // PATH search can fail if Helium not in system PATH
+  }
+
+  return null;
 }
 
 function findHistoryDatabase(): string | null {
@@ -185,7 +169,7 @@ function getHistoryDbCandidates(): string[] {
 }
 
 function convertChromiumTimestamp(timestamp: number): Date {
-  const unixTimestamp = timestamp / 1000000 - 11644473600;
+  const unixTimestamp = timestamp / MICROSECONDS_PER_SECOND - CHROMIUM_EPOCH_OFFSET_SECONDS;
   return new Date(unixTimestamp * 1000);
 }
 
@@ -218,9 +202,9 @@ function getThumbnailUrl(url: string): string {
 function formatDate(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+  const diffMins = Math.floor(diffMs / MS_PER_MINUTE);
+  const diffHours = Math.floor(diffMs / MS_PER_HOUR);
+  const diffDays = Math.floor(diffMs / MS_PER_DAY);
 
   if (diffMins < 1) {
     return "Just now";
@@ -237,7 +221,6 @@ function formatDate(date: Date): string {
 
 let cachedHistory: HistoryItem[] | null = null;
 let cacheTimestamp: number = 0;
-const CACHE_TTL_MS = 60000;
 
 function clearHistoryCache() {
   cachedHistory = null;
@@ -303,8 +286,7 @@ function loadHistoryFromDb(): HistoryItem[] {
     let result: HistoryItem[] = [];
 
     try {
-      const query =
-        "SELECT id, url, title, visit_count, last_visit_time FROM urls ORDER BY last_visit_time DESC LIMIT 500;";
+      const query = `SELECT id, url, title, visit_count, last_visit_time FROM urls ORDER BY last_visit_time DESC LIMIT ${MAX_RESULTS};`;
 
       const escapedSqlitePath = sqlite3Path.replace(/"/g, '""');
       const escapedDbPath = tempDbPath.replace(/"/g, '""');
@@ -314,8 +296,8 @@ function loadHistoryFromDb(): HistoryItem[] {
 
       const output = execSync(command, {
         encoding: "utf-8",
-        timeout: 30000,
-        maxBuffer: 10 * 1024 * 1024,
+        timeout: DB_QUERY_TIMEOUT_MS,
+        maxBuffer: DB_MAX_BUFFER_BYTES,
       });
 
       const rows = JSON.parse(output || "[]") as Array<{
@@ -362,16 +344,20 @@ function loadHistory(searchQuery: string = ""): HistoryItem[] {
   }
 
   if (!searchQuery.trim()) {
-    return cachedHistory.slice(0, 500);
+    return cachedHistory.slice(0, MAX_RESULTS);
   }
 
   const query = searchQuery.toLowerCase();
   return cachedHistory
     .filter((item) => item.title.toLowerCase().includes(query) || item.url.toLowerCase().includes(query))
-    .slice(0, 500);
+    .slice(0, MAX_RESULTS);
 }
 
 async function deleteHistoryEntry(entryId: number): Promise<boolean> {
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    throw new Error("Invalid entry ID");
+  }
+
   const dbPath = findHistoryDatabase();
   if (!dbPath) {
     throw new Error("History database not found");
@@ -381,9 +367,8 @@ async function deleteHistoryEntry(entryId: number): Promise<boolean> {
   const escapedSqlitePath = sqlite3Path.replace(/"/g, '""');
   const tempDir = process.env.TEMP || process.env.TMP || os.tmpdir();
 
-  // Strategy 1: Try direct deletion with WAL mode and transaction (works if browser isn't actively writing)
   try {
-    const deleteQuery = `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=15000; BEGIN IMMEDIATE TRANSACTION; DELETE FROM urls WHERE id = ${entryId}; DELETE FROM visits WHERE url = ${entryId}; COMMIT;`;
+    const deleteQuery = `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}; BEGIN IMMEDIATE TRANSACTION; DELETE FROM urls WHERE id = ${entryId}; DELETE FROM visits WHERE url = ${entryId}; COMMIT;`;
     const escapedDbPath = dbPath.replace(/"/g, '""');
     const escapedQuery = deleteQuery.replace(/"/g, '""');
     const command = `"${escapedSqlitePath}" "${escapedDbPath}" "${escapedQuery}"`;
@@ -423,11 +408,10 @@ async function deleteHistoryEntry(entryId: number): Promise<boolean> {
     const escapedQuery = deleteQuery.replace(/"/g, '""');
     const command = `"${escapedSqlitePath}" "${escapedTempDbPath}" "${escapedQuery}"`;
 
-    execSync(command, { encoding: "utf-8", timeout: 15000 });
+    execSync(command, { encoding: "utf-8", timeout: DB_BUSY_TIMEOUT_MS });
 
-    // Try to replace original file (with retries)
     let replaced = false;
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < MAX_FILE_REPLACE_ATTEMPTS; attempt++) {
       try {
         fs.copyFileSync(tempDbPath, dbPath);
         replaced = true;
@@ -474,22 +458,45 @@ async function launchURL(url: string): Promise<boolean> {
     return false;
   }
 
+  if (!fs.existsSync(heliumPath)) {
+    return false;
+  }
+
   try {
-    const escapedPath = heliumPath.replace(/'/g, "''").replace(/"/g, '\\"');
-    const escapedUrl = url.replace(/'/g, "''").replace(/"/g, '\\"');
+    new URL(url);
+  } catch {
+    return false;
+  }
+
+  try {
+    spawn(heliumPath, [url], { detached: true, stdio: "ignore" }).unref();
+    return true;
+  } catch {
+    // spawn failed, try shell-based approaches
+  }
+
+  try {
+    const escapedPath = heliumPath.replace(/'/g, "''");
+    const escapedUrl = url.replace(/'/g, "''");
 
     await execAsync(
       `powershell -Command "Start-Process -FilePath '${escapedPath}' -ArgumentList '${escapedUrl}' -ErrorAction Stop"`,
     );
     return true;
   } catch {
-    try {
-      await execAsync(`cmd /c start "" "${heliumPath}" "${url}"`);
-      return true;
-    } catch {
-      return false;
-    }
+    // PowerShell failed, try CMD
   }
+
+  try {
+    const escapedPath = heliumPath.replace(/"/g, '""');
+    const escapedUrl = url.replace(/"/g, '""');
+    await execAsync(`cmd /c start "" "${escapedPath}" "${escapedUrl}"`);
+    return true;
+  } catch (error: unknown) {
+    console.error("[LaunchURL] All strategies failed:", error instanceof Error ? error.message : String(error));
+  }
+
+  return false;
 }
 
 export default function Command() {
