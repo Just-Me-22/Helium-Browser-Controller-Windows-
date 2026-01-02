@@ -7,32 +7,33 @@ type Preferences = {
 };
 
 /**
- * Launch Helium browser with home page
- * This bypasses first-time setup and opens the home page
+ * Launch Helium browser bypassing first-run setup
+ * Uses Chromium flags to skip setup dialogs
  */
 async function launchHelium(heliumPath: string): Promise<boolean> {
+  // Chromium flags to skip first-run experience
+  const skipSetupFlags = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-first-run-ui",
+  ];
+
   try {
-    // Strategy 1: Direct spawn with about:home
-    // This opens home instead of setup screen
-    spawn(heliumPath, ["about:home"], { detached: true, stdio: "ignore" }).unref();
+    // Strategy 1: Direct spawn with skip-setup flags
+    spawn(heliumPath, skipSetupFlags, { detached: true, stdio: "ignore" }).unref();
     return true;
   } catch {
-    // Strategy 2: Fallback with empty profile (uses existing profile)
+    // Strategy 2: CMD fallback with flags
     try {
-      spawn(heliumPath, [], { detached: true, stdio: "ignore" }).unref();
+      const escapedPath = heliumPath.replace(/"/g, '""');
+      const flagsStr = skipSetupFlags.join(" ");
+      spawn("cmd.exe", ["/c", `start "" "${escapedPath}" ${flagsStr}`], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
       return true;
     } catch {
-      // Strategy 3: CMD fallback
-      try {
-        const escapedPath = heliumPath.replace(/"/g, '""');
-        spawn("cmd.exe", ["/c", `start "" "${escapedPath}" about:home`], {
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-        return true;
-      } catch {
-        return false;
-      }
+      return false;
     }
   }
 }
