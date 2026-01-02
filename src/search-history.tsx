@@ -228,10 +228,7 @@ function clearHistoryCache() {
 }
 
 function getSqlite3Path(): string {
-  console.log("__dirname:", __dirname);
-  console.log("process.cwd():", process.cwd());
-
-  // Try every possible combination
+  // Try every possible combination for sqlite3.exe
   const possiblePaths = [
     path.join(__dirname, "..", "assets", "sqlite3.exe"),
     path.join(__dirname, "..", "bin", "sqlite3.exe"),
@@ -246,10 +243,7 @@ function getSqlite3Path(): string {
   ];
 
   for (const p of possiblePaths) {
-    console.log("Trying path:", p);
-    console.log("Exists:", fs.existsSync(p));
     if (fs.existsSync(p)) {
-      console.log("Found sqlite3 at:", p);
       return p;
     }
   }

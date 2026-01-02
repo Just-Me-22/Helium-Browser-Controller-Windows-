@@ -27,15 +27,6 @@
       "entry": "src/create-tab.ts"
     },
     {
-      "name": "open-new-browser-window",
-      "title": "Open New Browser Window",
-      "subtitle": "Browser",
-      "description": "Opens a new Helium browser window",
-      "mode": "no-view",
-      "icon": "command-icon.png",
-      "entry": "src/open-new-browser-window.ts"
-    },
-    {
       "name": "open-private-window",
       "title": "Open Private Window",
       "subtitle": "Browser",

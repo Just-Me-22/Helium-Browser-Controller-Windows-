@@ -1,82 +1,64 @@
 import { showHUD, getPreferenceValues } from "@raycast/api";
-import { exec, spawn } from "child_process";
-import { promisify } from "util";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
-
-const execAsync = promisify(exec);
+import { spawn } from "child_process";
+import { findHeliumPath } from "./utils/browser";
 
 type Preferences = {
   heliumPath?: string;
 };
 
-function existsFile(p: string): boolean {
+/**
+ * Launch Helium browser with home page
+ * This bypasses first-time setup and opens the home page
+ */
+async function launchHelium(heliumPath: string): Promise<boolean> {
   try {
-    return fs.existsSync(p);
+    // Strategy 1: Direct spawn with about:home
+    // This opens home instead of setup screen
+    spawn(heliumPath, ["about:home"], { detached: true, stdio: "ignore" }).unref();
+    return true;
   } catch {
-    return false;
+    // Strategy 2: Fallback with empty profile (uses existing profile)
+    try {
+      spawn(heliumPath, [], { detached: true, stdio: "ignore" }).unref();
+      return true;
+    } catch {
+      // Strategy 3: CMD fallback
+      try {
+        const escapedPath = heliumPath.replace(/"/g, '""');
+        spawn("cmd.exe", ["/c", `start "" "${escapedPath}" about:home`], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+        return true;
+      } catch {
+        return false;
+      }
+    }
   }
-}
-
-function getHeliumCandidatePaths(): string[] {
-  const candidates: string[] = [];
-  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  const programFiles = process.env.PROGRAMFILES || "C:\\Program Files";
-  const programFilesX86 = process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)";
-
-  candidates.push(
-    path.join(localAppData, "imput", "Helium", "Application", "chrome.exe"),
-    path.join(localAppData, "imput", "Helium", "Helium.exe"),
-    path.join(localAppData, "Programs", "Helium", "Helium.exe"),
-    path.join(localAppData, "Helium", "Helium.exe"),
-    path.join(programFiles, "Helium", "Helium.exe"),
-    path.join(programFilesX86, "Helium", "Helium.exe"),
-  );
-
-  return candidates;
-}
-
-async function findHeliumPath(): Promise<string | null> {
-  const prefs = getPreferenceValues<Preferences>();
-  if (prefs.heliumPath && existsFile(prefs.heliumPath)) {
-    return prefs.heliumPath;
-  }
-
-  for (const p of getHeliumCandidatePaths()) {
-    if (existsFile(p)) return p;
-  }
-
-  return null;
 }
 
 export default async function main() {
   try {
-    const heliumPath = await findHeliumPath();
+    const prefs = getPreferenceValues<Preferences>();
+    const heliumPath = await findHeliumPath(prefs.heliumPath);
 
     if (!heliumPath) {
       await showHUD("❌ Helium not found — set path in preferences");
       return;
     }
 
-    // Validate path exists (security check)
-    if (!existsFile(heliumPath)) {
-      await showHUD("❌ Invalid Helium path in preferences");
-      return;
-    }
+    // Launch Helium without specifying a URL - uses existing profile/home page
+    // This prevents first-time setup screen and opens with saved settings
+    const success = await launchHelium(heliumPath);
 
-    // Use spawn instead of shell execution (safer - prevents command injection)
-    try {
-      spawn(heliumPath, [], { detached: true, stdio: "ignore" }).unref();
+    if (success) {
       await showHUD("✅ Helium opened");
-    } catch {
-      // Fallback to CMD with proper escaping
-      const escapedPath = heliumPath.replace(/"/g, '""');
-      await execAsync(`cmd /c start "" "${escapedPath}"`);
-      await showHUD("✅ Helium opened");
+    } else {
+      await showHUD("❌ Failed to open Helium");
     }
-  } catch (e) {
-    console.error("Error launching Helium:", e);
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error("Error launching Helium:", errorMsg);
     await showHUD("❌ Failed to open Helium");
   }
 }
