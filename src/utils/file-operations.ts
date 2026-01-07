@@ -73,17 +73,30 @@ export async function replaceFileSafely(
  * Create a temporary file copy for safe modification
  * Returns the temp file path or null if creation failed
  */
-export function createTempFileCopy(sourcePath: string, prefix: string = "helium-"): string | null {
-  try {
-    const tempDir = os.tmpdir();
-    const ext = path.extname(sourcePath);
-    const tempPath = path.join(tempDir, `${prefix}${Date.now()}${ext}`);
+export async function createTempFileCopy(
+  sourcePath: string,
+  prefix: string = "helium-",
+  maxAttempts: number = 3,
+  initialDelayMs: number = 300
+): Promise<string | null> {
+  const tempDir = os.tmpdir();
+  const ext = path.extname(sourcePath);
+  const tempPath = path.join(tempDir, `${prefix}${Date.now()}${ext}`);
 
-    fs.copyFileSync(sourcePath, tempPath);
-    return tempPath;
-  } catch {
-    return null;
+  // Use retry logic to handle file locks
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      fs.copyFileSync(sourcePath, tempPath);
+      return tempPath;
+    } catch (error: unknown) {
+      if (attempt < maxAttempts - 1) {
+        // Calculate exponential backoff delay
+        const delayMs = initialDelayMs * Math.pow(1.5, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
   }
+  return null;
 }
 
 /**

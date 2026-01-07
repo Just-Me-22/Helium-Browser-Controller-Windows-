@@ -150,7 +150,11 @@ async function loadDownloadsFromDatabase(dbPath: string, profileName: string): P
   let tempDbPath: string | null = null;
 
   try {
-    tempDbPath = createTempFileCopy(dbPath, "downloads-");
+    tempDbPath = await createTempFileCopy(dbPath, "downloads-");
+
+    if (!tempDbPath) {
+      throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+    }
 
     const query = `
       PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS};
@@ -303,7 +307,11 @@ async function deleteDownloadEntry(downloadItem: DownloadItem): Promise<void> {
 
   try {
     // Copy database to temp
-    tempDbPath = createTempFileCopy(targetDb.path, "downloads-delete-");
+    tempDbPath = await createTempFileCopy(targetDb.path, "downloads-delete-");
+
+    if (!tempDbPath) {
+      throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+    }
 
     // Execute delete transaction
     const deleteQuery = `
@@ -381,7 +389,11 @@ async function deleteMultipleDownloadEntries(downloadItems: DownloadItem[]): Pro
     let tempDbPath: string | null = null;
 
     try {
-      tempDbPath = createTempFileCopy(targetDb.path, "downloads-bulk-delete-");
+      tempDbPath = await createTempFileCopy(targetDb.path, "downloads-bulk-delete-");
+
+      if (!tempDbPath) {
+        throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+      }
 
       const deleteStatements = items
         .map((item) => `DELETE FROM downloads WHERE id = ${item.id}; DELETE FROM downloads_url_chains WHERE id = ${item.id};`)

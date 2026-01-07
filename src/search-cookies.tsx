@@ -115,7 +115,11 @@ async function loadCookiesFromDatabase(dbPath: string, profileName: string): Pro
   let tempDbPath: string | null = null;
 
   try {
-    tempDbPath = createTempFileCopy(dbPath, "cookies-");
+    tempDbPath = await createTempFileCopy(dbPath, "cookies-");
+
+    if (!tempDbPath) {
+      throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+    }
 
     const query = `
       PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS};
@@ -289,7 +293,11 @@ async function deleteCookie(cookie: CookieItem): Promise<void> {
   let tempDbPath: string | null = null;
 
   try {
-    tempDbPath = createTempFileCopy(targetDb.path, "cookies-delete-");
+    tempDbPath = await createTempFileCopy(targetDb.path, "cookies-delete-");
+
+    if (!tempDbPath) {
+      throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+    }
 
     const deleteQuery = `
       PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS};
@@ -350,7 +358,11 @@ async function deleteAllCookiesForDomain(cookie: CookieItem): Promise<number> {
   let tempDbPath: string | null = null;
 
   try {
-    tempDbPath = createTempFileCopy(targetDb.path, "cookies-domain-delete-");
+    tempDbPath = await createTempFileCopy(targetDb.path, "cookies-domain-delete-");
+
+    if (!tempDbPath) {
+      throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+    }
 
     // Count first
     const countQuery = `
@@ -454,7 +466,11 @@ async function deleteMultipleCookies(cookies: CookieItem[]): Promise<void> {
     let tempDbPath: string | null = null;
 
     try {
-      tempDbPath = createTempFileCopy(targetDb.path, "cookies-bulk-delete-");
+      tempDbPath = await createTempFileCopy(targetDb.path, "cookies-bulk-delete-");
+
+      if (!tempDbPath) {
+        throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
+      }
 
       const deleteStatements = items
         .map((cookie) => `DELETE FROM cookies WHERE host_key = '${cookie.hostKey.replace(/'/g, "''")}' AND name = '${cookie.name.replace(/'/g, "''")}' AND creation_utc = ${cookie.creationUtc};`)
