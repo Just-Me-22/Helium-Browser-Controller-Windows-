@@ -61,6 +61,24 @@
       "mode": "no-view",
       "icon": "command-icon.png",
       "entry": "src/close-browser.ts"
+    },
+    {
+      "name": "search-downloads",
+      "title": "Search Downloads",
+      "subtitle": "Browser",
+      "description": "Search and manage Helium browser downloads across all profiles",
+      "mode": "view",
+      "icon": "command-icon.png",
+      "entry": "src/search-downloads.tsx"
+    },
+    {
+      "name": "search-cookies",
+      "title": "Search Cookies",
+      "subtitle": "Browser",
+      "description": "View and manage Helium browser cookies across all profiles",
+      "mode": "view",
+      "icon": "command-icon.png",
+      "entry": "src/search-cookies.tsx"
     }
   ],
   "preferences": [

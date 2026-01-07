@@ -107,3 +107,86 @@ export function isValidBookmarksFile(filePath: string): boolean {
 export function isValidHistoryDatabase(filePath: string): boolean {
   return fs.existsSync(filePath) && filePath.endsWith(HELIUM_DATA_PATHS.HISTORY_FILE);
 }
+
+/**
+ * Get all candidate paths where cookies database might exist
+ * Checks both newer (Network/Cookies) and older (Cookies) locations
+ */
+export function getCookiesDatabaseCandidates(userDataDir: string): string[] {
+  const candidates: string[] = [];
+
+  const profiles = ["Default", "Profile 1", "Profile 2", "Guest Profile"];
+
+  for (const profile of profiles) {
+    // Newer Chromium: Network/Cookies subdirectory
+    candidates.push(path.join(userDataDir, profile, "Network", HELIUM_DATA_PATHS.COOKIES_FILE));
+
+    // Older Chromium: Direct Cookies file
+    candidates.push(path.join(userDataDir, profile, HELIUM_DATA_PATHS.COOKIES_FILE));
+  }
+
+  // Root-level cookies (unlikely but check anyway)
+  candidates.push(path.join(userDataDir, HELIUM_DATA_PATHS.COOKIES_FILE));
+
+  return candidates;
+}
+
+/**
+ * Find cookies database in Helium User Data directory
+ * Returns the first found database (usually Default profile)
+ */
+export async function findCookiesDatabase(): Promise<string | null> {
+  const userDataDir = await findHeliumUserDataDir();
+  if (!userDataDir) {
+    return null;
+  }
+
+  const candidates = getCookiesDatabaseCandidates(userDataDir);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find all cookies databases across all profiles
+ * Returns array of {path, profile} objects for multi-profile support
+ */
+export async function findAllCookiesDatabases(): Promise<Array<{ path: string; profile: string }>> {
+  const databases: Array<{ path: string; profile: string }> = [];
+  const userDataDir = await findHeliumUserDataDir();
+
+  if (!userDataDir) {
+    return databases;
+  }
+
+  const profiles = ["Default", "Profile 1", "Profile 2", "Guest Profile"];
+
+  for (const profile of profiles) {
+    // Check newer location first
+    const newerPath = path.join(userDataDir, profile, "Network", HELIUM_DATA_PATHS.COOKIES_FILE);
+    if (fs.existsSync(newerPath)) {
+      databases.push({ path: newerPath, profile });
+      continue; // Skip older location if newer exists
+    }
+
+    // Check older location
+    const olderPath = path.join(userDataDir, profile, HELIUM_DATA_PATHS.COOKIES_FILE);
+    if (fs.existsSync(olderPath)) {
+      databases.push({ path: olderPath, profile });
+    }
+  }
+
+  return databases;
+}
+
+/**
+ * Check if a cookies database path is valid and readable
+ */
+export function isValidCookiesDatabase(filePath: string): boolean {
+  return fs.existsSync(filePath) && filePath.endsWith(HELIUM_DATA_PATHS.COOKIES_FILE);
+}

@@ -258,3 +258,50 @@ export async function executePowerShellScript(
     }
   }
 }
+
+/**
+ * Open Windows Explorer and select a specific file
+ * Equivalent to "Show in Folder" functionality
+ */
+export async function openFileInExplorer(filePath: string): Promise<boolean> {
+  try {
+    // Validate file exists
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
+
+    // Use explorer /select to highlight the file
+    spawn("explorer.exe", ["/select,", filePath], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open a file with its default application
+ * Uses Windows "start" command
+ */
+export async function openFileDirectly(filePath: string): Promise<boolean> {
+  try {
+    // Validate file exists
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
+
+    const escapedPath = escapeCmdString(filePath);
+
+    spawn("cmd.exe", ["/c", "start", "", `"${escapedPath}"`], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+
+    return true;
+  } catch {
+    return false;
+  }
+}
