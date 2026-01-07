@@ -16,6 +16,8 @@ import { findHeliumPath } from "./utils/browser";
 import { getDomain, getFaviconUrl, formatDate, formatAbsoluteDate, formatFileSize, convertChromiumTimestamp } from "./utils/formatters";
 import { launchUrlInBrowser, openFileInExplorer, openFileDirectly } from "./utils/shell";
 import { createTempFileCopy, cleanupTempFile, replaceFileSafely } from "./utils/file-operations";
+import { getHistoryDatabaseCandidates } from "./utils/data-files";
+import { findHeliumUserDataDir } from "./utils/browser";
 import {
   CACHE_TTL_MS,
   DB_QUERY_TIMEOUT_MS,
@@ -53,27 +55,20 @@ interface DownloadItem {
 /**
  * Find all History databases across profiles (downloads are in History DB)
  */
-function findAllHistoryDatabases(): Array<{ path: string; profile: string }> {
+async function findAllHistoryDatabases(): Promise<Array<{ path: string; profile: string }>> {
   const databases: Array<{ path: string; profile: string }> = [];
-  const localAppData = process.env.LOCALAPPDATA;
+  const userDataDir = await findHeliumUserDataDir();
 
-  if (!localAppData) {
+  if (!userDataDir) {
     return databases;
   }
 
-  const userDataRoots = [
-    path.join(localAppData, "imput", "Helium", "User Data"),
-    path.join(localAppData, "Helium", "User Data"),
-  ];
-
   const profiles = ["Default", "Profile 1", "Profile 2", "Guest Profile"];
 
-  for (const root of userDataRoots) {
-    for (const profile of profiles) {
-      const dbPath = path.join(root, profile, "History");
-      if (fs.existsSync(dbPath)) {
-        databases.push({ path: dbPath, profile });
-      }
+  for (const profile of profiles) {
+    const dbPath = path.join(userDataDir, profile, "History");
+    if (fs.existsSync(dbPath)) {
+      databases.push({ path: dbPath, profile });
     }
   }
 
@@ -232,7 +227,7 @@ async function loadDownloads(): Promise<DownloadItem[]> {
     return cachedDownloads;
   }
 
-  const databases = findAllHistoryDatabases();
+  const databases = await findAllHistoryDatabases();
 
   if (databases.length === 0) {
     throw new Error("No History database found. Please ensure Helium browser is installed.");
@@ -272,7 +267,7 @@ function clearDownloadsCache(): void {
  * Delete a download entry from the database
  */
 async function deleteDownloadEntry(downloadItem: DownloadItem): Promise<void> {
-  const databases = findAllHistoryDatabases();
+  const databases = await findAllHistoryDatabases();
   const targetDb = databases.find((db) => db.profile === downloadItem.profileName);
 
   if (!targetDb) {
@@ -350,7 +345,7 @@ async function deleteMultipleDownloadEntries(downloadItems: DownloadItem[]): Pro
 
   // Delete from each profile database
   for (const [profileName, items] of byProfile) {
-    const databases = findAllHistoryDatabases();
+    const databases = await findAllHistoryDatabases();
     const targetDb = databases.find((db) => db.profile === profileName);
 
     if (!targetDb) {
