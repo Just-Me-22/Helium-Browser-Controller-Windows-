@@ -54,10 +54,30 @@ interface DownloadItem {
 
 /**
  * Find all History databases across profiles (downloads are in History DB)
+ * Uses utility function with direct fallback for common installation paths
  */
 async function findAllHistoryDatabases(): Promise<Array<{ path: string; profile: string }>> {
   const databases: Array<{ path: string; profile: string }> = [];
-  const userDataDir = await findHeliumUserDataDir();
+
+  // Strategy 1: Use utility function
+  let userDataDir = await findHeliumUserDataDir();
+
+  // Strategy 2: Direct fallback to common paths if utility fails
+  if (!userDataDir) {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      const commonPaths = [
+        path.join(localAppData, "imput", "Helium", "User Data"),
+        path.join(localAppData, "Helium", "User Data"),
+      ];
+      for (const candidate of commonPaths) {
+        if (fs.existsSync(candidate)) {
+          userDataDir = candidate;
+          break;
+        }
+      }
+    }
+  }
 
   if (!userDataDir) {
     return databases;

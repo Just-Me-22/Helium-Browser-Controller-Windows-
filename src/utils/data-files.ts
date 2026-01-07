@@ -155,10 +155,30 @@ export async function findCookiesDatabase(): Promise<string | null> {
 /**
  * Find all cookies databases across all profiles
  * Returns array of {path, profile} objects for multi-profile support
+ * Uses utility function with direct fallback for common installation paths
  */
 export async function findAllCookiesDatabases(): Promise<Array<{ path: string; profile: string }>> {
   const databases: Array<{ path: string; profile: string }> = [];
-  const userDataDir = await findHeliumUserDataDir();
+
+  // Strategy 1: Use utility function
+  let userDataDir = await findHeliumUserDataDir();
+
+  // Strategy 2: Direct fallback to common paths if utility fails
+  if (!userDataDir) {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      const commonPaths = [
+        path.join(localAppData, "imput", "Helium", "User Data"),
+        path.join(localAppData, "Helium", "User Data"),
+      ];
+      for (const candidate of commonPaths) {
+        if (fs.existsSync(candidate)) {
+          userDataDir = candidate;
+          break;
+        }
+      }
+    }
+  }
 
   if (!userDataDir) {
     return databases;
