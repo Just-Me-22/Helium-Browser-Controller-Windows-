@@ -56,13 +56,21 @@ interface CookieItem {
 
 /**
  * Find sqlite3.exe bundled with the extension
+ * Uses absolute paths based on __dirname for reliable detection
  */
 function getSqlite3Path(): string | null {
+  // Try multiple path combinations relative to the built extension location
   const candidates = [
-    "assets/bin/sqlite3.exe",
-    "assets/sqlite3.exe",
-    "bin/sqlite3.exe",
-    "sqlite3.exe",
+    path.join(__dirname, "..", "assets", "sqlite3.exe"),
+    path.join(__dirname, "..", "bin", "sqlite3.exe"),
+    path.join(__dirname, "assets", "sqlite3.exe"),
+    path.join(__dirname, "bin", "sqlite3.exe"),
+    path.join(__dirname, "..", "..", "assets", "sqlite3.exe"),
+    path.join(__dirname, "..", "..", "bin", "sqlite3.exe"),
+    path.join(process.cwd(), "assets", "sqlite3.exe"),
+    path.join(process.cwd(), "bin", "sqlite3.exe"),
+    path.resolve("assets", "sqlite3.exe"),
+    path.resolve("bin", "sqlite3.exe"),
   ];
 
   for (const candidate of candidates) {
