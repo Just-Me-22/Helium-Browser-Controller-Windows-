@@ -9,6 +9,8 @@ A browser control extension for the Windows version of Raycast. This project ext
   - - Search browsing history
     - - Open private and standard browser windows
       - - Close all browser windows
+        - - Cookie control options, like for example, deleting cookies by domain, deleting cookie, and copying cookie values, etc. (NEW!)
+          -  Searching for downloads, removing downloaded files, and opening files. (NEW!)
        
         - ## Technologies
        
