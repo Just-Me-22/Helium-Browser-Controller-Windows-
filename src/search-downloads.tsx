@@ -164,8 +164,60 @@ async function loadDownloadsFromDatabase(dbPath: string, profileName: string): P
       throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
     }
 
+    async function runSqliteJsonQuery(query: string): Promise<any[]> {
+      const output = await new Promise<string>((resolve, reject) => {
+        const proc = spawn(sqlite3Path, ["-json", "-cmd", `.timeout ${DB_BUSY_TIMEOUT_MS}`, tempDbPath!, query], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        let stdout = "";
+        let stderr = "";
+
+        const timer = setTimeout(() => {
+          try {
+            proc.kill();
+          } catch {
+            // ignore
+          }
+          reject(new Error(`SQLite query timed out after ${DB_QUERY_TIMEOUT_MS}ms`));
+        }, DB_QUERY_TIMEOUT_MS);
+
+        proc.stdout?.on("data", (data) => {
+          stdout += data.toString();
+          if (stdout.length > DB_MAX_BUFFER_BYTES) {
+            clearTimeout(timer);
+            try {
+              proc.kill();
+            } catch {
+              // ignore
+            }
+            reject(new Error(`SQLite output exceeded ${DB_MAX_BUFFER_BYTES} bytes`));
+          }
+        });
+
+        proc.stderr?.on("data", (data) => {
+          stderr += data.toString();
+        });
+
+        proc.on("close", (code) => {
+          clearTimeout(timer);
+          if (code === 0) {
+            resolve(stdout);
+          } else {
+            reject(new Error(`SQLite query failed: ${stderr.trim()}`));
+          }
+        });
+
+        proc.on("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+
+      return JSON.parse(output || "[]");
+    }
+
     const query = `
-      PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS};
       SELECT
         d.id,
         d.guid,
@@ -184,37 +236,7 @@ async function loadDownloadsFromDatabase(dbPath: string, profileName: string): P
       LIMIT 500;
     `;
 
-    const result = await new Promise<string>((resolve, reject) => {
-      const proc = spawn(sqlite3Path, ["-json", tempDbPath!, query], {
-        timeout: DB_QUERY_TIMEOUT_MS,
-        maxBuffer: DB_MAX_BUFFER_BYTES,
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          reject(new Error(`SQLite query failed: ${stderr}`));
-        }
-      });
-
-      proc.on("error", (err) => {
-        reject(err);
-      });
-    });
-
-    const rawResults = JSON.parse(result || "[]");
+    const rawResults = await runSqliteJsonQuery(query);
 
     return rawResults.map((row: any) => {
       const currentPath = row.current_path || row.target_path || "";

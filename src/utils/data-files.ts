@@ -8,6 +8,31 @@ import * as fs from "fs";
 import { findHeliumUserDataDir } from "./browser";
 import { HELIUM_DATA_PATHS } from "./constants";
 
+function getProfileCandidates(userDataDir: string): string[] {
+  try {
+    const entries = fs.readdirSync(userDataDir, { withFileTypes: true });
+    const profiles = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .filter((name) => name === "Default" || name === "Guest Profile" || /^Profile \d+$/.test(name));
+
+    if (profiles.length > 0) {
+      const defaultFirst = profiles.filter((p) => p === "Default");
+      const numberedProfiles = profiles
+        .filter((p) => p.startsWith("Profile "))
+        .sort((a, b) => parseInt(a.replace("Profile ", ""), 10) - parseInt(b.replace("Profile ", ""), 10));
+      const guest = profiles.filter((p) => p === "Guest Profile");
+      const other = profiles.filter((p) => !defaultFirst.includes(p) && !numberedProfiles.includes(p) && !guest.includes(p));
+
+      return [...defaultFirst, ...numberedProfiles, ...guest, ...other];
+    }
+  } catch {
+    // Ignore directory enumeration errors, fall back to common profile names.
+  }
+
+  return ["Default", "Profile 1", "Profile 2", "Profile 3", "Guest Profile"];
+}
+
 /**
  * Get all candidate paths where bookmarks file might exist
  */
@@ -115,7 +140,7 @@ export function isValidHistoryDatabase(filePath: string): boolean {
 export function getCookiesDatabaseCandidates(userDataDir: string): string[] {
   const candidates: string[] = [];
 
-  const profiles = ["Default", "Profile 1", "Profile 2", "Guest Profile"];
+  const profiles = getProfileCandidates(userDataDir);
 
   for (const profile of profiles) {
     // Newer Chromium: Network/Cookies subdirectory
@@ -184,7 +209,7 @@ export async function findAllCookiesDatabases(): Promise<Array<{ path: string; p
     return databases;
   }
 
-  const profiles = ["Default", "Profile 1", "Profile 2", "Guest Profile"];
+  const profiles = getProfileCandidates(userDataDir);
 
   for (const profile of profiles) {
     // Check newer location first

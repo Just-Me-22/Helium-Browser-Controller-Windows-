@@ -122,6 +122,59 @@ async function loadCookiesFromDatabase(dbPath: string, profileName: string): Pro
   // Copy database to temp to avoid locks
   let tempDbPath: string | null = null;
 
+  async function runSqliteJsonQuery(tempPath: string, query: string): Promise<any[]> {
+    const output = await new Promise<string>((resolve, reject) => {
+      const proc = spawn(sqlite3Path, ["-json", "-cmd", `.timeout ${DB_BUSY_TIMEOUT_MS}`, tempPath, query], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      const timer = setTimeout(() => {
+        try {
+          proc.kill();
+        } catch {
+          // ignore
+        }
+        reject(new Error(`SQLite query timed out after ${DB_QUERY_TIMEOUT_MS}ms`));
+      }, DB_QUERY_TIMEOUT_MS);
+
+      proc.stdout?.on("data", (data) => {
+        stdout += data.toString();
+        if (stdout.length > DB_MAX_BUFFER_BYTES) {
+          clearTimeout(timer);
+          try {
+            proc.kill();
+          } catch {
+            // ignore
+          }
+          reject(new Error(`SQLite output exceeded ${DB_MAX_BUFFER_BYTES} bytes`));
+        }
+      });
+
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve(stdout);
+        } else {
+          reject(new Error(`SQLite query failed: ${stderr.trim()}`));
+        }
+      });
+
+      proc.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    return JSON.parse(output || "[]");
+  }
+
   try {
     tempDbPath = await createTempFileCopy(dbPath, "cookies-");
 
@@ -129,8 +182,7 @@ async function loadCookiesFromDatabase(dbPath: string, profileName: string): Pro
       throw new Error("Failed to create temporary copy of database (file may be locked by Helium browser)");
     }
 
-    const query = `
-      PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS};
+    const primaryQuery = `
       SELECT
         creation_utc,
         host_key,
@@ -150,37 +202,67 @@ async function loadCookiesFromDatabase(dbPath: string, profileName: string): Pro
       LIMIT 1000;
     `;
 
-    const result = await new Promise<string>((resolve, reject) => {
-      const proc = spawn(sqlite3Path, ["-json", tempDbPath!, query], {
-        timeout: DB_QUERY_TIMEOUT_MS,
-        maxBuffer: DB_MAX_BUFFER_BYTES,
-      });
+    // Older Chromium schemas may not have has_expires/is_persistent/samesite.
+    const fallbackQueryMissingColumns = `
+      SELECT
+        creation_utc,
+        host_key,
+        name,
+        value,
+        encrypted_value,
+        path,
+        expires_utc,
+        is_secure,
+        is_httponly,
+        last_access_utc,
+        CASE WHEN expires_utc > 0 THEN 1 ELSE 0 END as has_expires,
+        CASE WHEN expires_utc > 0 THEN 1 ELSE 0 END as is_persistent,
+        -1 as samesite
+      FROM cookies
+      ORDER BY host_key ASC, name ASC
+      LIMIT 1000;
+    `;
 
-      let stdout = "";
-      let stderr = "";
+    // Some older schemas may not have encrypted_value.
+    const fallbackQueryNoEncryptedValue = `
+      SELECT
+        creation_utc,
+        host_key,
+        name,
+        value,
+        NULL as encrypted_value,
+        path,
+        expires_utc,
+        is_secure,
+        is_httponly,
+        last_access_utc,
+        CASE WHEN expires_utc > 0 THEN 1 ELSE 0 END as has_expires,
+        CASE WHEN expires_utc > 0 THEN 1 ELSE 0 END as is_persistent,
+        -1 as samesite
+      FROM cookies
+      ORDER BY host_key ASC, name ASC
+      LIMIT 1000;
+    `;
 
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve(stdout);
-        } else {
-          reject(new Error(`SQLite query failed: ${stderr}`));
+    let rawResults: any[] = [];
+    let lastError: unknown = null;
+    for (const query of [primaryQuery, fallbackQueryMissingColumns, fallbackQueryNoEncryptedValue]) {
+      try {
+        rawResults = await runSqliteJsonQuery(tempDbPath!, query);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/no such column|no such table/i.test(message)) {
+          throw error;
         }
-      });
+      }
+    }
 
-      proc.on("error", (err) => {
-        reject(err);
-      });
-    });
-
-    const rawResults = JSON.parse(result || "[]");
+    if (lastError) {
+      throw lastError;
+    }
 
     return rawResults.map((row: any) => {
       const hostKey = row.host_key || "";
@@ -249,6 +331,7 @@ async function loadCookies(): Promise<CookieItem[]> {
   }
 
   const allCookies: CookieItem[] = [];
+  const loadErrors: Array<{ profile: string; message: string }> = [];
 
   for (const { path: dbPath, profile } of databases) {
     try {
@@ -257,7 +340,16 @@ async function loadCookies(): Promise<CookieItem[]> {
     } catch (error) {
       // Skip this profile if it fails, continue with others
       console.error(`Failed to load cookies from ${profile}:`, error);
+      const message = error instanceof Error ? error.message : String(error);
+      loadErrors.push({ profile, message });
     }
+  }
+
+  if (allCookies.length === 0 && loadErrors.length > 0) {
+    const first = loadErrors[0];
+    throw new Error(
+      `Failed to load cookies from ${loadErrors.length}/${databases.length} profiles. First error (${first.profile}): ${first.message}`
+    );
   }
 
   // Sort all cookies by domain + name

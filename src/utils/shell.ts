@@ -29,8 +29,8 @@ export function escapeCmdString(input: string): string {
  * Handles errors gracefully with proper output encoding
  */
 export function execPowerShell(command: string): Promise<string> {
-  return new Promise((resolve) => {
-    const ps = spawn("powershell.exe", ["-NoProfile", "-Command", command], {
+  return new Promise((resolve, reject) => {
+    const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -45,12 +45,20 @@ export function execPowerShell(command: string): Promise<string> {
       errorOutput += data.toString();
     });
 
-    ps.on("close", () => {
-      resolve(output.trim());
+    ps.on("close", (code) => {
+      const stdout = output.trim();
+      const stderr = errorOutput.trim();
+
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+
+      reject(new Error(stderr || stdout || `PowerShell exited with code ${code ?? "unknown"}`));
     });
 
-    ps.on("error", () => {
-      resolve("");
+    ps.on("error", (err) => {
+      reject(err instanceof Error ? err : new Error("Failed to start PowerShell process"));
     });
   });
 }
@@ -91,8 +99,8 @@ export async function launchUrlWithPowerShell(
       [System.Diagnostics.Process]::Start($p)
     `;
 
-    const result = await execPowerShell(psCommand);
-    return result.length > 0 || true; // Assume success if command executed
+    await execPowerShell(psCommand);
+    return true;
   } catch {
     return false;
   }
